@@ -1,0 +1,17 @@
+[package]
+name = "zd-detect"
+version = "0.1.0"
+description = "IVK-only note detection for disaggregated Orchard-protocol wallets: trial-decrypt compact Orchard and Ironwood actions and emit NoteReports"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+orchard.workspace = true
+zcash_note_encryption = "0.5"
+zd-proto = { path = "../zd-proto" }
+
+[dev-dependencies]
+rand = { workspace = true, features = ["sys_rng"] }
+orchard = { workspace = true, features = ["circuit"] }

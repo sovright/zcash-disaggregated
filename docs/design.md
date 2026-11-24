@@ -68,3 +68,16 @@ then each participant derives the account and broadcasts `fvk_hash`.
   `zd_frost::spend` session per spend.
 - Policy checks (Verifier role: outputs, values, recipients) stay with the
   signer service and must run before round 1.
+
+## Detectors (`zd-detect`) and address servers (`zd-address`)
+
+- Detectors hold the external and internal IVKs only. They trial-decrypt
+  lightwalletd compact actions in both pools (Ironwood with the v3 note
+  domain, Orchard with v2), report each opened note with its commitment tree
+  position, and forward every nullifier, since an IVK cannot compute
+  nullifiers. Memos are not in compact actions; wallet state fetches the full
+  transaction when it needs one.
+- Address servers hold the external IVK. Server `i` owns diversifier indices
+  whose top byte is `i` (2^80 each) and must persist its counter. Addresses
+  are revision 0 unified addresses (`u1...`) with a single Orchard receiver,
+  the form deployed wallets parse today.

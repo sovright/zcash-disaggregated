@@ -1,0 +1,14 @@
+[package]
+name = "zd-address"
+version = "0.1.0"
+description = "Address servers for disaggregated Orchard-protocol wallets: shielded unified addresses from the external IVK, with disjoint diversifier ranges per server"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+orchard.workspace = true
+thiserror.workspace = true
+zcash_address = "0.14"
+zcash_protocol = "0.11"

@@ -811,6 +811,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "f4jumble"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cae5503f6dc8629246d7e9b3450d3712e5be20f2ed7f9fb6b67212a4f315adc"
+dependencies = [
+ "blake2b_simd",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3222,6 +3231,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "zcash_address"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "372023d82d978ab3f27b8e9f7f9b56fc61f3c9cc2b72ec2f8e3bbb278497e474"
+dependencies = [
+ "bech32",
+ "bs58",
+ "corez",
+ "f4jumble",
+ "zcash_encoding",
+ "zcash_protocol",
+]
+
+[[package]]
 name = "zcash_encoding"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3335,6 +3358,26 @@ dependencies = [
  "zcash_script",
  "zcash_spec",
  "zip32",
+]
+
+[[package]]
+name = "zd-address"
+version = "0.1.0"
+dependencies = [
+ "orchard",
+ "thiserror",
+ "zcash_address",
+ "zcash_protocol",
+]
+
+[[package]]
+name = "zd-detect"
+version = "0.1.0"
+dependencies = [
+ "orchard",
+ "rand 0.10.4",
+ "zcash_note_encryption",
+ "zd-proto",
 ]
 
 [[package]]
