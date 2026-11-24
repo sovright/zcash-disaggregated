@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package zd.v1;
+
+import "zd/v1/common.proto";
+
+// Spends travel as PCZTs (ZIP 374). Wallet state runs Creator, Constructor,
+// IO Finalizer and Updater, then sends the same PCZT to a prover and to the
+// signers in parallel; v6 transactions let signing happen before the anchor
+// and witnesses are fixed.
+
+// Any 1 of n provers. A prover receives the account FVK and full note data
+// inside the PCZT, so provers must be inside the customer's trust boundary.
+service Prover {
+  rpc Prove(ProveJob) returns (ProveResult);
+}
+
+message ProveJob {
+  bytes job_id = 1;
+  AccountRef account = 2;
+  // PCZT with fvk, witness and anchor set for every spend.
+  bytes pczt = 3;
+  uint64 deadline_unix_ms = 4;
+}
+
+message ProveResult {
+  bytes job_id = 1;
+  oneof outcome {
+    // The PCZT with Ironwood / Orchard proofs attached.
+    bytes proved_pczt = 2;
+    string error = 3;
+  }
+  uint64 prove_time_ms = 4;
+}
+
+// A 1/1 signer, or the coordinator of a FROST quorum. FROST rounds themselves
+// run over frostd; this service is the entry point that hands over the PCZT.
+service Signer {
+  rpc Sign(SignJob) returns (SignResult);
+}
+
+message SignJob {
+  bytes job_id = 1;
+  AccountRef account = 2;
+  // Redacted PCZT: no witnesses, but values, recipients and alphas present so
+  // each signer can run the Verifier role and its own policy.
+  bytes pczt = 3;
+  // Optional human-readable reason shown to approvers.
+  string memo = 4;
+}
+
+message SignResult {
+  bytes job_id = 1;
+  oneof outcome {
+    bytes signed_pczt = 2;
+    string rejected_reason = 3;
+  }
+}

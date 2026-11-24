@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package zd.v1;
+
+// Zcash network a message refers to.
+enum Network {
+  NETWORK_UNSPECIFIED = 0;
+  NETWORK_MAINNET = 1;
+  NETWORK_TESTNET = 2;
+  NETWORK_REGTEST = 3;
+}
+
+// Orchard-protocol value pool. Ironwood (NU6.3) is the active pool; Orchard is
+// exit-only but still spendable during migration.
+enum Pool {
+  POOL_UNSPECIFIED = 0;
+  POOL_ORCHARD = 1;
+  POOL_IRONWOOD = 2;
+}
+
+// ZIP 32 key scope of a received note.
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+  SCOPE_EXTERNAL = 1;
+  SCOPE_INTERNAL = 2;
+}
+
+// The roles a deployment is split into. See docs/design.md.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_DETECTOR = 1;
+  ROLE_ADDRESS_SERVICE = 2;
+  ROLE_WALLET_STATE = 3;
+  ROLE_PROVER = 4;
+  ROLE_SIGNER = 5;
+  ROLE_CEREMONY_PARTICIPANT = 6;
+}
+
+// A long-lived identity key for one role instance. Every message a role emits
+// is signed with this key so the receiver can attribute it.
+message RoleIdentity {
+  Role role = 1;
+  // Ed25519 public key, 32 bytes.
+  bytes public_key = 2;
+  // Human-readable instance name, e.g. "detector-us-east-1".
+  string instance = 3;
+}
+
+// Authenticated wrapper for any message in this package. `payload` is the
+// protobuf encoding of the inner message; `type_url` names it.
+message SignedEnvelope {
+  string type_url = 1;
+  bytes payload = 2;
+  RoleIdentity sender = 3;
+  // Ed25519 signature over ("zd.v1.SignedEnvelope" || type_url || payload).
+  bytes signature = 4;
+  uint64 sent_at_unix_ms = 5;
+}
+
+// Account a message is about. The id is the BLAKE2b-256 hash of the encoded
+// UFVK, so roles can refer to an account without exchanging keys.
+message AccountRef {
+  bytes ufvk_fingerprint = 1;
+  Network network = 2;
+}
