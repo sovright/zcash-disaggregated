@@ -32,10 +32,27 @@ decisions the code depends on.
    detectors and address services.
 7. Each participant backs up its share, `sk`, `ak`, and `use_qsk = true`.
 
-## Known gap: RedPallas FROST ciphersuite
+## RedPallas FROST (`zd-frost`)
 
 `reddsa` 0.6 (Sep 2026) removed its `frost` feature, and the ciphersuite has
-not yet been published from the ZcashFoundation `frost` repository. The last
-published `frost-core` (3.0.0) depends on `rand_core` 0.6, while `orchard`
-0.16 uses `rand_core` 0.10. Step 3 therefore needs either the upstream
-release or a local ciphersuite crate; it is the next piece of work.
+not yet been published from the ZcashFoundation `frost` repository (#963).
+`zd-frost` carries a port of the `reddsa` 0.5.2 ciphersuite onto
+`pasta_curves` 0.6 with every upstream constant unchanged; a test checks that
+keys, commitments, shares and signatures are byte-identical to `reddsa` 0.5.2,
+so we can switch to the upstream crate without migrating key material.
+`frost-core` 3.0 still uses `rand_core` 0.6, so only the 0.6 RNG traits appear
+in `zd-frost`'s API.
+
+**Fixed randomizer.** A PCZT fixes `alpha` (and so `rk`) per spend before
+signing. `frost-rerandomized` 3.0 only supports a caller-chosen randomizer
+through a deprecated function (frost #1094), because a coordinator that picks
+the randomizer after seeing commitments gains power. `zd_frost::spend` instead
+binds each signer's nonces to `(sighash, alpha)` from a PCZT it has already
+checked, and refuses a signing package for any other message, so `alpha` is
+fixed before any commitment exists. One signing run per Orchard spend.
+
+**Ceremony.** `zd_frost::ceremony` merges the `sk` commit-reveal with the DKG:
+round 1 broadcasts the `sk` commitment and DKG round 1 package; round 2 sends
+the `sk` reveal and DKG round 2 package point to point over confidential
+channels (anyone who sees every reveal learns `sk`, hence `nk` and `qsk`);
+then each participant derives the account and broadcasts `fvk_hash`.
