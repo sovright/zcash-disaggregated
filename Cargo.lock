@@ -3449,6 +3449,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "zd-services"
+version = "0.1.0"
+dependencies = [
+ "ff 0.14.0",
+ "incrementalmerkletree",
+ "orchard",
+ "pczt",
+ "rand 0.10.4",
+ "rand_core 0.6.4",
+ "shardtree",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "zcash_note_encryption",
+ "zcash_primitives",
+ "zcash_protocol",
+ "zd-address",
+ "zd-frost",
+ "zd-keys",
+ "zd-pczt",
+ "zd-proto",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"

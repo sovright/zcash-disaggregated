@@ -1,0 +1,32 @@
+[package]
+name = "zd-services"
+version = "0.1.0"
+description = "gRPC services for the prover, 1/1 signer and address roles of a disaggregated Orchard-protocol wallet"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+orchard = { workspace = true, features = ["circuit"] }
+pczt = { version = "0.10", features = ["signer", "prover"] }
+rand = { workspace = true, features = ["sys_rng"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+tonic.workspace = true
+zcash_protocol = "0.11"
+zd-address = { path = "../zd-address" }
+zd-pczt = { path = "../zd-pczt" }
+zd-proto = { path = "../zd-proto" }
+
+[dev-dependencies]
+tokio-stream = { version = "0.1", features = ["net"] }
+ff.workspace = true
+incrementalmerkletree = "0.9"
+pczt = { version = "0.10", features = ["signer", "prover", "io-finalizer", "tx-extractor", "zcp-builder"] }
+rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
+shardtree = "0.8"
+zcash_note_encryption = "0.5"
+zcash_primitives = { version = "0.31", features = ["transparent-inputs"] }
+zcash_protocol = { version = "0.11", features = ["local-consensus"] }
+zd-frost = { path = "../zd-frost" }
+zd-keys = { path = "../zd-keys" }
