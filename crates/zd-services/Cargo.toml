@@ -12,10 +12,20 @@ blake2b_simd.workspace = true
 orchard = { workspace = true, features = ["circuit"] }
 pczt = { version = "0.10", features = ["signer", "prover"] }
 rand = { workspace = true, features = ["sys_rng"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+thiserror.workspace = true
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+prost.workspace = true
+zeroize.workspace = true
+zd-keys = { path = "../zd-keys" }
 tonic.workspace = true
 zcash_protocol = "0.11"
 zd-address = { path = "../zd-address" }
+zd-detect = { path = "../zd-detect" }
+zcash_client_backend = { version = "0.25", default-features = false, features = ["lightwalletd-tonic-transport"] }
+tokio-stream = "0.1"
 zd-pczt = { path = "../zd-pczt" }
 zd-proto = { path = "../zd-proto" }
 zd-frost = { path = "../zd-frost" }
@@ -30,4 +40,3 @@ shardtree = "0.8"
 zcash_note_encryption = "0.5"
 zcash_primitives = { version = "0.31", features = ["transparent-inputs"] }
 zcash_protocol = { version = "0.11", features = ["local-consensus"] }
-zd-keys = { path = "../zd-keys" }

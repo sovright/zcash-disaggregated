@@ -9,20 +9,30 @@ import "zd/v1/common.proto";
 // receives in the Ironwood pool remain quantum-recoverable.
 //
 // Steps (see docs/design.md, "Key ceremony"):
-//   1. Coordinator broadcasts CeremonyParams.
-//   2. Each participant sends SkCommit, then SkReveal; `sk` = hash of all reveals.
-//   3. FROST DKG rounds 1 and 2 (opaque packages).
+//   1. Every participant receives the same CeremonyParams out of band.
+//   2. Round 1 (broadcast): sk commitment + FROST DKG round 1.
+//   3. Round 2 (sealed, point to point): sk reveal + FROST DKG round 2.
 //   4. Each participant derives nk, qsk, qk, rivk_ext and the FVK.
-//   5. Each participant sends FvkConfirmation; the quorum signs the transcript.
+//   5. Each participant sends FvkConfirmation and checks everyone else's.
 //   6. AccountExport to wallet state; ViewingExport to detectors and addresses.
+//
+// Participants connect to a relay, which routes messages but is trusted only
+// for availability: every message is a SignedEnvelope (Ed25519, payload = an
+// encoded CeremonyMessage, type_url "zd.v1.CeremonyMessage") from a key named
+// in CeremonyParams, and round 2 travels sealed to its recipient's X25519
+// key. A participant's first message is its signed copy of CeremonyParams,
+// which every participant receives out of band beforehand.
 service KeyCeremony {
-  rpc Exchange(stream CeremonyMessage) returns (stream CeremonyMessage);
+  rpc Exchange(stream SignedEnvelope) returns (stream SignedEnvelope);
 }
 
 message CeremonyParticipant {
-  // FROST identifier, 1..=n.
+  // FROST identifier, 1..=65535.
   uint32 id = 1;
+  // Ed25519 key that signs this participant's messages.
   RoleIdentity identity = 2;
+  // X25519 key that round 2 messages to this participant are sealed to.
+  bytes encryption_key = 3;
 }
 
 message CeremonyParams {
@@ -30,31 +40,35 @@ message CeremonyParams {
   repeated CeremonyParticipant participants = 2;
   Network network = 3;
   string account_label = 4;
-  // Random 32 bytes chosen by the coordinator, mixed into the transcript.
+  // Random 32 bytes chosen by whoever sets up the ceremony.
   bytes nonce = 5;
 }
 
-// BLAKE2b-256 commitment to a participant's 32-byte sk contribution.
-message SkCommit {
+// Round 1, broadcast: commitment to the participant's sk contribution and its
+// serialized FROST DKG round 1 package.
+message CeremonyRound1 {
   bytes transcript_id = 1;
   uint32 participant = 2;
-  bytes commitment = 3;
+  bytes sk_commit = 3;
+  bytes dkg_package = 4;
 }
 
-message SkReveal {
+// Round 2, point to point: CeremonyRound2Plaintext sealed to the recipient.
+// Anyone who could read every round 2 message would learn sk and every key
+// share, so these are never sent in the clear.
+message CeremonySealedRound2 {
   bytes transcript_id = 1;
-  uint32 participant = 2;
-  bytes contribution = 3;
+  uint32 sender = 2;
+  uint32 recipient = 3;
+  // Sender's ephemeral X25519 public key.
+  bytes ephemeral_key = 4;
+  // ChaCha20-Poly1305 ciphertext of an encoded CeremonyRound2Plaintext.
+  bytes ciphertext = 5;
 }
 
-// Serialized frost-rerandomized DKG package for the RedPallas ciphersuite.
-message DkgPackage {
-  bytes transcript_id = 1;
-  uint32 round = 2;
-  uint32 sender = 3;
-  // Set for round 2 packages, which are sent point to point.
-  uint32 recipient = 4;
-  bytes package = 5;
+message CeremonyRound2Plaintext {
+  bytes sk_reveal = 1;
+  bytes dkg_package = 2;
 }
 
 message FvkConfirmation {
@@ -82,11 +96,11 @@ message ViewingExport {
 }
 
 message CeremonyMessage {
+  reserved 2, 3, 4;
   oneof body {
     CeremonyParams params = 1;
-    SkCommit sk_commit = 2;
-    SkReveal sk_reveal = 3;
-    DkgPackage dkg = 4;
+    CeremonyRound1 round1 = 8;
+    CeremonySealedRound2 sealed_round2 = 9;
     FvkConfirmation confirmation = 5;
     AccountExport account_export = 6;
     ViewingExport viewing_export = 7;

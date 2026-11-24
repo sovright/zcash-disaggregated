@@ -7,12 +7,18 @@
 //! - [`frost::FrostParticipantService`] and [`frost::FrostCoordinatorService`]:
 //!   a FROST quorum over our own gRPC rounds; the coordinator is the account's
 //!   `Signer` service.
+//! - [`ceremony`]: the key ceremony relay and participant, with signed
+//!   envelopes and round 2 sealed to each recipient.
+//! - [`detector`]: the detector daemon loop, reading compact blocks from
+//!   lightwalletd and streaming reports to wallet state's `WalletIngest`.
 //! - [`address::AddressServiceImpl`]: diversified address minting with a
 //!   persisted counter per account.
 //!
 //! Accounts are identified on the wire by `AccountRef.ufvk_fingerprint`.
 
 pub mod address;
+pub mod ceremony;
+pub mod detector;
 pub mod frost;
 pub mod prover;
 pub mod signer;

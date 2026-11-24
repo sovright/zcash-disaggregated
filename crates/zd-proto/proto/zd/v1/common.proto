@@ -52,7 +52,8 @@ message SignedEnvelope {
   string type_url = 1;
   bytes payload = 2;
   RoleIdentity sender = 3;
-  // Ed25519 signature over ("zd.v1.SignedEnvelope" || type_url || payload).
+  // Ed25519 signature over "zd.v1.SignedEnvelope" || u32le(len(type_url)) ||
+  // type_url || payload.
   bytes signature = 4;
   uint64 sent_at_unix_ms = 5;
 }

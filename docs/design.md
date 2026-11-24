@@ -99,3 +99,18 @@ Chosen 2026-11-24: FROST rounds use our own gRPC (`FrostParticipant` in
   whatever the outcome; a second `Commit` for the same job is refused.
 - The coordinator holds no secrets. It can deny service but cannot get a
   signature over a PCZT a member's policy rejected.
+
+## Detector daemon and ceremony service (`zd-services`)
+
+- The detector reads compact blocks from lightwalletd (`GetBlockRange` with
+  the Orchard and Ironwood pools; `zcash_client_backend` 0.25 protos). Its
+  chain metadata gives tree sizes at the end of each block, so positions are
+  computed from the size minus the block's actions. Nullifiers go to wallet
+  state before notes for each batch. Reorgs are wallet state's job: every
+  report carries its block hash.
+- The ceremony runs through a relay trusted only for delivery. Participants
+  get `CeremonyParams` (ids, Ed25519 identity keys, X25519 encryption keys,
+  threshold, nonce) out of band. Every message is a signed envelope; round 2
+  is sealed to its recipient (ephemeral X25519, BLAKE2b key derivation bound
+  to transcript, keys and ids, ChaCha20-Poly1305). The relay drops anything
+  unsigned or from a participant whose params differ.
