@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package zd.v1;
+
+import "zd/v1/common.proto";
+
+// Detectors hold only a UIVK. Any number of them stream what they find to
+// wallet state, which merges reports keyed by (txid, pool, action_index) and
+// re-checks each note against the chain, so a dishonest detector can withhold
+// but not invent.
+service WalletIngest {
+  rpc ReportNotes(stream NoteReport) returns (IngestAck);
+  rpc ReportNullifiers(stream NullifierBatch) returns (IngestAck);
+}
+
+message NoteReport {
+  AccountRef account = 1;
+  uint32 height = 2;
+  bytes block_hash = 3;
+  bytes txid = 4;
+  Pool pool = 5;
+  uint32 action_index = 6;
+  // Position of the note commitment in the pool's commitment tree.
+  uint64 commitment_position = 7;
+  // Extracted note commitment, as it appears on chain.
+  bytes cmx = 8;
+  Scope scope = 9;
+  // Decrypted note contents.
+  bytes recipient = 10; // 43-byte raw Orchard address
+  uint64 value_zat = 11;
+  bytes rho = 12;
+  bytes rseed = 13;
+  // Note plaintext version byte (0x02 Orchard, 0x03 Ironwood / ZIP 2005).
+  uint32 note_version = 14;
+  bytes memo = 15;
+}
+
+// All nullifiers revealed in one block for one pool. Detectors can forward
+// these without learning anything; wallet state matches them using nk.
+message NullifierBatch {
+  uint32 height = 1;
+  bytes block_hash = 2;
+  Pool pool = 3;
+  repeated bytes nullifiers = 4;
+}
+
+message IngestAck {
+  uint64 accepted = 1;
+  uint64 duplicates = 2;
+  uint64 rejected = 3;
+  uint32 tip_height = 4;
+}

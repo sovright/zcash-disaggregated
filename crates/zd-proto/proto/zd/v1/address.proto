@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package zd.v1;
+
+import "zd/v1/common.proto";
+
+// Address servers hold the external UIVK and mint diversified unified
+// addresses. Each server owns a disjoint range of the 88-bit diversifier
+// index space (server i uses indices whose top byte is i), so servers never
+// coordinate and never hand out the same index.
+service AddressService {
+  rpc NewAddress(AddressRequest) returns (AddressResponse);
+}
+
+message AddressRequest {
+  AccountRef account = 1;
+  // Free-form purpose, e.g. "deposit", "quote", "invoice".
+  string purpose = 2;
+  // Caller's reference, e.g. a quote or customer id. Stored by the server for
+  // accounting; never encoded into the address.
+  string label = 3;
+}
+
+message AddressResponse {
+  AccountRef account = 1;
+  // Shielded-only unified address (Orchard-protocol receiver; payments to it
+  // land in the Ironwood pool).
+  string unified_address = 2;
+  // 11-byte little-endian diversifier index.
+  bytes diversifier_index = 3;
+  uint32 server_id = 4;
+  string label = 5;
+}

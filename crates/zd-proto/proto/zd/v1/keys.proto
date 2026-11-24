@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package zd.v1;
+
+import "zd/v1/common.proto";
+
+// KeyCeremony: create a FROST t-of-n (or HSM 1/1) Orchard-protocol account
+// whose keys follow the ZIP 2005 `use_qsk = true` derivation, so notes it
+// receives in the Ironwood pool remain quantum-recoverable.
+//
+// Steps (see docs/design.md, "Key ceremony"):
+//   1. Coordinator broadcasts CeremonyParams.
+//   2. Each participant sends SkCommit, then SkReveal; `sk` = hash of all reveals.
+//   3. FROST DKG rounds 1 and 2 (opaque packages).
+//   4. Each participant derives nk, qsk, qk, rivk_ext and the FVK.
+//   5. Each participant sends FvkConfirmation; the quorum signs the transcript.
+//   6. AccountExport to wallet state; ViewingExport to detectors and addresses.
+service KeyCeremony {
+  rpc Exchange(stream CeremonyMessage) returns (stream CeremonyMessage);
+}
+
+message CeremonyParticipant {
+  // FROST identifier, 1..=n.
+  uint32 id = 1;
+  RoleIdentity identity = 2;
+}
+
+message CeremonyParams {
+  uint32 threshold = 1;
+  repeated CeremonyParticipant participants = 2;
+  Network network = 3;
+  string account_label = 4;
+  // Random 32 bytes chosen by the coordinator, mixed into the transcript.
+  bytes nonce = 5;
+}
+
+// BLAKE2b-256 commitment to a participant's 32-byte sk contribution.
+message SkCommit {
+  bytes transcript_id = 1;
+  uint32 participant = 2;
+  bytes commitment = 3;
+}
+
+message SkReveal {
+  bytes transcript_id = 1;
+  uint32 participant = 2;
+  bytes contribution = 3;
+}
+
+// Serialized frost-rerandomized DKG package for the RedPallas ciphersuite.
+message DkgPackage {
+  bytes transcript_id = 1;
+  uint32 round = 2;
+  uint32 sender = 3;
+  // Set for round 2 packages, which are sent point to point.
+  uint32 recipient = 4;
+  bytes package = 5;
+}
+
+message FvkConfirmation {
+  bytes transcript_id = 1;
+  uint32 participant = 2;
+  // BLAKE2b-256 of the 96-byte raw FVK (ak || nk || rivk).
+  bytes fvk_hash = 3;
+}
+
+// What wallet state receives. ZIP 2005 calls this the "host wallet": it needs
+// ak, nk and qk for a future recovery statement, but never qsk or ask.
+message AccountExport {
+  bytes transcript_id = 1;
+  AccountRef account = 2;
+  string ufvk = 3;
+  string uivk = 4;
+  bytes qk = 5;
+  bool use_qsk = 6;
+}
+
+// What detectors and the address service receive.
+message ViewingExport {
+  AccountRef account = 1;
+  string uivk = 2;
+}
+
+message CeremonyMessage {
+  oneof body {
+    CeremonyParams params = 1;
+    SkCommit sk_commit = 2;
+    SkReveal sk_reveal = 3;
+    DkgPackage dkg = 4;
+    FvkConfirmation confirmation = 5;
+    AccountExport account_export = 6;
+    ViewingExport viewing_export = 7;
+    string abort_reason = 15;
+  }
+}

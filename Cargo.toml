@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/zd-proto", "crates/zd-keys"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+repository = "https://github.com/sovright/zcash-disaggregated"
+
+[workspace.dependencies]
+blake2b_simd = "1"
+blake3 = "1"
+ff = "0.14"
+group = "0.14"
+orchard = { version = "0.16", default-features = false, features = ["std", "zeroize", "unstable-frost"] }
+pasta_curves = "0.6"
+prost = "0.14"
+rand = "0.10"
+rand_core = "0.10"
+thiserror = "2"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+protox = "0.10"
+zeroize = "1"

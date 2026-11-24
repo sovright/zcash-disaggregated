@@ -1,0 +1,17 @@
+[package]
+name = "zd-proto"
+version = "0.1.0"
+description = "Wire messages and gRPC services between the roles of a disaggregated Zcash wallet"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+prost.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
