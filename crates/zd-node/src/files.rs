@@ -292,11 +292,74 @@ impl ParamsFile {
     }
 }
 
-/// Reads a decimal height from a state file, if present.
-pub fn read_height(path: &Path) -> Result<Option<u64>> {
-    match std::fs::read_to_string(path) {
-        Ok(s) => Ok(Some(s.trim().parse().context("state file")?)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+/// A detector's saved position.
+#[derive(Debug, Serialize, Deserialize)]
+struct CursorFile {
+    next: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prev_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reorg_epoch: Option<u64>,
+}
+
+/// Reads a detector cursor, if the file exists. A bare decimal height (the
+/// earlier format) is accepted too.
+pub fn read_cursor(path: &Path) -> Result<Option<zd_services::detector::Cursor>> {
+    let s = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    if let Ok(next) = s.trim().parse::<u64>() {
+        return Ok(Some(zd_services::detector::Cursor::starting_at(next)));
+    }
+    let f: CursorFile =
+        toml::from_str(&s).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(Some(zd_services::detector::Cursor {
+        next: f.next,
+        prev_hash: f
+            .prev_hash
+            .map(|h| hex::decode(h).context("prev_hash hex"))
+            .transpose()?,
+        reorg_epoch: f.reorg_epoch,
+    }))
+}
+
+/// Saves a detector cursor atomically.
+pub fn write_cursor(path: &Path, c: &zd_services::detector::Cursor) -> Result<()> {
+    let f = CursorFile {
+        next: c.next,
+        prev_hash: c.prev_hash.as_ref().map(hex::encode),
+        reorg_epoch: c.reorg_epoch,
+    };
+    write_atomic(path, toml::to_string(&f)?.as_bytes(), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zd_services::detector::Cursor;
+
+    #[test]
+    fn cursor_round_trips_and_reads_old_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("detector.state");
+        assert_eq!(read_cursor(&p).unwrap(), None);
+
+        std::fs::write(&p, "3500000\n").unwrap();
+        assert_eq!(
+            read_cursor(&p).unwrap(),
+            Some(Cursor::starting_at(3_500_000))
+        );
+
+        let c = Cursor {
+            next: 3_500_100,
+            prev_hash: Some(vec![7; 32]),
+            reorg_epoch: Some(4),
+        };
+        write_cursor(&p, &c).unwrap();
+        assert_eq!(read_cursor(&p).unwrap(), Some(c));
+        write_cursor(&p, &Cursor::starting_at(9)).unwrap();
+        assert_eq!(read_cursor(&p).unwrap(), Some(Cursor::starting_at(9)));
     }
 }

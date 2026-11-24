@@ -26,6 +26,7 @@ zd-address = { path = "../zd-address" }
 zd-detect = { path = "../zd-detect" }
 zcash_client_backend = { version = "0.25", default-features = false, features = ["lightwalletd-tonic-transport"] }
 tokio-stream = "0.1"
+tracing = "0.1"
 zd-pczt = { path = "../zd-pczt" }
 zd-proto = { path = "../zd-proto" }
 zd-frost = { path = "../zd-frost" }

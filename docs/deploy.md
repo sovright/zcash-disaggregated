@@ -93,8 +93,14 @@ zd address --server-id 1 --account account.toml --counters counters/
 zd new-address --server https://address:7104 --account account.toml
 ```
 
-Run several detectors against different lightwalletd servers; wallet state
-deduplicates. Give each address server a distinct `--server-id`.
+`--account` and `--lightwalletd` can be repeated. One detector scans for all
+its accounts; with several lightwalletd servers it fails over to the next on
+any error, backing off up to a minute. Its position is saved in `--state`
+after each batch, and it handles reorgs itself (see `docs/design.md`). Run
+several detectors, ideally against different lightwalletd operators; wallet
+state deduplicates. To add an account with an older birthday, run a detector
+for it with its own `--state` and `--from`. Give each address server a
+distinct `--server-id`.
 
 ## 6. Sending
 

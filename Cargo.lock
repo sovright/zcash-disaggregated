@@ -4294,6 +4294,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tracing",
  "x25519-dalek",
  "zcash_client_backend",
  "zcash_note_encryption",

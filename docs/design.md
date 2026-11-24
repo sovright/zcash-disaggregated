@@ -106,8 +106,19 @@ Chosen 2026-11-24: FROST rounds use our own gRPC (`FrostParticipant` in
   the Orchard and Ironwood pools; `zcash_client_backend` 0.25 protos). Its
   chain metadata gives tree sizes at the end of each block, so positions are
   computed from the size minus the block's actions. Nullifiers go to wallet
-  state before notes for each batch. Reorgs are wallet state's job: every
-  report carries its block hash.
+  state before notes for each batch.
+- One detector process can serve many accounts: each block is decrypted once
+  per account, and its nullifiers are sent once. Its position is a cursor
+  (next height, previous block hash, wallet reorg epoch) saved after every
+  batch, so it resumes exactly where it stopped. `zd detector` retries with
+  backoff and fails over across several lightwalletd servers.
+- Reorgs are caught twice. The detector checks that every block's
+  `prev_hash` is the previous block's hash and, if not, steps back 10 blocks
+  and rescans before reporting anything from the new blocks. Wallet state is
+  the authority: when its trees find a reorg it forgets reports above the
+  fork and bumps a reorg epoch, and every `IngestAck` carries the epoch and
+  the height to rescan from. A detector that sees a newer epoch goes back
+  there; a new detector adopts the current epoch without going back.
 - The ceremony runs through a relay trusted only for delivery. Participants
   get `CeremonyParams` (ids, Ed25519 identity keys, X25519 encryption keys,
   threshold, nonce) out of band. Every message is a signed envelope; round 2
@@ -132,9 +143,13 @@ memory.
   self-consistent note that a detector made up never becomes spendable.
 - **Trees.** In memory, rebuilt from the tree state before the earliest
   account birthday on start; each block is a checkpoint, and the last 100 are
-  kept for reorgs. A reorg rewinds trees and database by 10 blocks; notes in
-  the discarded blocks are forgotten until detectors rescan (v1 limitation:
-  detectors are not told automatically).
+  kept for reorgs. A reorg rewinds trees and database by 10 blocks and tells
+  detectors to rescan from there (see the detector section).
+- **Late reports.** A note reported for a block the trees already applied
+  (a lagging detector, or a rescan after a reorg) would never be marked, so
+  wallet state rewinds just the trees to before that block and re-applies.
+  If the block is older than the kept checkpoints, the trees are rebuilt
+  from the birthday.
 - **Sends.** Notes are picked Ironwood first, largest first; the fee is the
   ZIP 317 fee from the builder, iterated until the selection settles. Change
   goes to the internal address in Ironwood. The PCZT goes to the prover with

@@ -119,10 +119,23 @@ fn bundle(version: BundleVersion, to: &Payments) -> Vec<cf::CompactOrchardAction
         .collect()
 }
 
-/// A chain from empty trees: one transaction per block.
-fn chain(start: u64, blocks: Vec<(Payments, Payments)>) -> Vec<cf::CompactBlock> {
-    let (mut o, mut i) = (0u32, 0u32);
-    let mut prev = vec![0xee; 32];
+fn block_hash(tag: u8, height: u64) -> Vec<u8> {
+    let mut h = vec![tag; 32];
+    h[..8].copy_from_slice(&height.to_le_bytes());
+    h
+}
+
+/// A linked chain, one transaction per block, on top of `prev` with tree
+/// sizes `sizes` (orchard, ironwood) at its start.
+fn chain_on(
+    start: u64,
+    tag: u8,
+    prev: Vec<u8>,
+    sizes: (u32, u32),
+    blocks: Vec<(Payments, Payments)>,
+) -> Vec<cf::CompactBlock> {
+    let (mut o, mut i) = sizes;
+    let mut prev = prev;
     blocks
         .into_iter()
         .enumerate()
@@ -131,9 +144,10 @@ fn chain(start: u64, blocks: Vec<(Payments, Payments)>) -> Vec<cf::CompactBlock>
             let ironwood = bundle(BundleVersion::ironwood_v3(), &ip);
             o += orchard.len() as u32;
             i += ironwood.len() as u32;
-            let hash = vec![n as u8 + 1; 32];
+            let height = start + n as u64;
+            let hash = block_hash(tag, height);
             cf::CompactBlock {
-                height: start + n as u64,
+                height,
                 hash: hash.clone(),
                 prev_hash: std::mem::replace(&mut prev, hash),
                 vtx: vec![cf::CompactTx {
@@ -152,6 +166,13 @@ fn chain(start: u64, blocks: Vec<(Payments, Payments)>) -> Vec<cf::CompactBlock>
         })
         .collect()
 }
+
+/// A chain from empty trees on top of block `start - 1` with hash GENESIS.
+fn chain(start: u64, blocks: Vec<(Payments, Payments)>) -> Vec<cf::CompactBlock> {
+    chain_on(start, 1, GENESIS.to_vec(), (0, 0), blocks)
+}
+
+const GENESIS: [u8; 32] = [0xee; 32];
 
 struct Memory(Vec<cf::CompactBlock>);
 
@@ -288,9 +309,16 @@ async fn detect_confirm_and_send() {
         &acct.fvk.to_ivk(Scope::Internal),
     );
     let mut source = Memory(blocks.clone());
-    let summary = detector::scan_range(&mut source, &det, &mut ingest, 10, 14)
-        .await
-        .unwrap();
+    let summary = detector::scan_range(
+        &mut source,
+        std::slice::from_ref(&det),
+        &mut ingest,
+        10,
+        14,
+        Some(&GENESIS),
+    )
+    .await
+    .unwrap();
     assert_eq!(summary.notes_ack.accepted, 2);
     assert_eq!(summary.notes_ack.rejected, 0);
 
@@ -497,8 +525,7 @@ fn reorg_rewinds_trees_and_notes() {
     };
 
     // A block that does not extend 12 is a reorg.
-    let mut fork = chain(13, vec![(vec![], vec![])]);
-    fork[0].prev_hash = vec![0xab; 32];
+    let fork = chain_on(13, 2, vec![0xab; 32], (0, 4), vec![(vec![], vec![])]);
     assert!(matches!(
         trees.apply_block(&db, &fork[0]),
         Err(Error::Reorg(12))
@@ -506,6 +533,7 @@ fn reorg_rewinds_trees_and_notes() {
 
     trees.rewind(10).unwrap();
     db.rewind(10).unwrap();
+    assert_eq!(db.reorg_marker().unwrap(), (1, 11));
     assert_eq!(trees.height(), 10);
     assert_eq!(trees.sizes(), (0, 2));
     assert_eq!(
@@ -526,4 +554,113 @@ fn reorg_rewinds_trees_and_notes() {
     for n in notes {
         assert!(trees.witness(n.pool, n.position).is_ok());
     }
+}
+
+/// Wallet state hits a reorg, rewinds and bumps its epoch; the detector
+/// finds the reorg itself, rescans the new chain, and reports a note for a
+/// block the trees already applied. Wallet state replays the trees from
+/// there, and the note becomes spendable.
+#[tokio::test(flavor = "multi_thread")]
+async fn wallet_and_detector_recover_from_reorg() {
+    let acct = account();
+    let ext = acct.fvk.address_at(1u32, Scope::External);
+    let db = WalletDb::in_memory().unwrap();
+    db.add_account(&acct.ufvk, None, "", 10).unwrap();
+
+    let empty = || (vec![], vec![]);
+    let a = chain(
+        10,
+        vec![
+            empty(),
+            empty(),
+            (vec![], vec![(ext, 5_000)]),
+            empty(),
+            empty(),
+        ],
+    );
+    let mut b = a[..2].to_vec();
+    b.extend(chain_on(
+        12,
+        9,
+        a[1].hash.clone(),
+        (0, 0),
+        vec![(vec![], vec![(ext, 7_000)]), empty(), empty(), empty()],
+    ));
+
+    let trees = TreeTracker::new(
+        9,
+        Some(GENESIS.to_vec()),
+        Frontier::empty(),
+        Frontier::empty(),
+    )
+    .unwrap();
+    let state = WalletState::new(db, trees, network());
+    let mut ingest =
+        WalletIngestClient::new(serve(WalletIngestServer::new(IngestService(state.clone()))).await);
+    let det = [Detector::new(
+        account_ref(&acct.fp).unwrap(),
+        &acct.fvk.to_ivk(Scope::External),
+        &acct.fvk.to_ivk(Scope::Internal),
+    )];
+    let follow = FollowConfig {
+        confirmations: 0,
+        poll: Duration::from_millis(1),
+        reorg_rewind: 3,
+        ..Default::default()
+    };
+    let balance = |s: &WalletState<_>| s.db.lock().unwrap().balance(&acct.fp).unwrap().1;
+
+    // Chain A: detected and confirmed.
+    let s = detector::scan_range(
+        &mut Memory(a.clone()),
+        &det,
+        &mut ingest,
+        10,
+        14,
+        Some(&GENESIS),
+    )
+    .await
+    .unwrap();
+    assert_eq!((s.notes_ack.accepted, s.notes_ack.reorg_epoch), (1, 0));
+    follow_chain(&state, &mut Memory(a.clone()), follow, Some(14))
+        .await
+        .unwrap();
+    assert_eq!(balance(&state), 5_000);
+
+    // Chain B wins. Wallet state sees 15 does not extend its 14, rewinds to
+    // 11, forgets A's note, and applies B (whose note nobody reported yet).
+    follow_chain(&state, &mut Memory(b.clone()), follow, Some(15))
+        .await
+        .unwrap();
+    assert_eq!(state.trees.lock().unwrap().height(), 15);
+    assert_eq!(balance(&state), 0);
+    assert_eq!(state.db.lock().unwrap().reorg_marker().unwrap(), (1, 12));
+
+    // The detector notices on its own: B's 15 does not extend A's 14.
+    let err = detector::scan_range(
+        &mut Memory(b.clone()),
+        &det,
+        &mut ingest,
+        15,
+        15,
+        Some(&a[4].hash),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, DetectorError::Reorg { height: 15 }));
+    // It steps back and rescans; wallet state's ack names the same point.
+    let s = detector::scan_range(&mut Memory(b.clone()), &det, &mut ingest, 12, 15, None)
+        .await
+        .unwrap();
+    assert_eq!(s.notes_ack.accepted, 1);
+    assert_eq!((s.notes_ack.reorg_epoch, s.notes_ack.rescan_from), (1, 12));
+
+    // The note's block was already applied, so wallet state rewound its
+    // trees to 11; following again confirms the note.
+    assert_eq!(state.trees.lock().unwrap().height(), 11);
+    assert_eq!(balance(&state), 0);
+    follow_chain(&state, &mut Memory(b.clone()), follow, Some(15))
+        .await
+        .unwrap();
+    assert_eq!(balance(&state), 7_000);
 }

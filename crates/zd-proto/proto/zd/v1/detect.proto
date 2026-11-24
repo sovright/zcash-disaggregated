@@ -49,4 +49,10 @@ message IngestAck {
   uint64 duplicates = 2;
   uint64 rejected = 3;
   uint32 tip_height = 4;
+  // Wallet state's reorg counter. It goes up each time wallet state rewinds
+  // past a reorg and forgets what detectors reported above `rescan_from - 1`.
+  // A detector that has seen a lower epoch must restart at `rescan_from` (if
+  // it is already past it) and remember the new epoch.
+  uint64 reorg_epoch = 5;
+  uint32 rescan_from = 6;
 }

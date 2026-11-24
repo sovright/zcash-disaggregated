@@ -145,10 +145,17 @@ impl WalletDb {
     }
 
     /// Forgets everything above `height` after a reorg: notes mined there,
-    /// spends recorded there. Detectors must rescan from `height + 1`.
+    /// spends recorded there. Bumps the reorg epoch so that every detector
+    /// is told (in its next `IngestAck`) to rescan from `height + 1`.
     pub fn rewind(&self, height: u64) -> Result<(), Error> {
         let h = height as i64;
+        let (epoch, _) = self.reorg_marker()?;
         let tx = self.conn().unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO kv (key, value) VALUES ('reorg', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [[(epoch + 1).to_le_bytes(), (height + 1).to_le_bytes()].concat()],
+        )?;
         tx.execute("DELETE FROM notes WHERE height > ?1", [h])?;
         tx.execute(
             "UPDATE notes SET spent_height = NULL WHERE spent_height > ?1",
@@ -157,5 +164,17 @@ impl WalletDb {
         tx.execute("DELETE FROM spent_nullifiers WHERE height > ?1", [h])?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// `(reorg epoch, height detectors must rescan from)`; `(0, 0)` before
+    /// any reorg.
+    pub fn reorg_marker(&self) -> Result<(u64, u64), Error> {
+        Ok(match self.kv("reorg")? {
+            Some(v) if v.len() == 16 => (
+                u64::from_le_bytes(v[..8].try_into().expect("8 bytes")),
+                u64::from_le_bytes(v[8..].try_into().expect("8 bytes")),
+            ),
+            _ => (0, 0),
+        })
     }
 }

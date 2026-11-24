@@ -1,10 +1,19 @@
 //! The detector daemon: compact blocks in (from lightwalletd), note and
 //! nullifier reports out (to wallet state's `WalletIngest`).
 //!
-//! The detector is stateless apart from the next height to scan, which the
-//! caller persists. It does not handle reorgs itself: every report carries
-//! its block hash, and wallet state discards reports for blocks that leave
-//! the best chain and asks detectors to rescan from the fork point.
+//! The detector's only state is a [`Cursor`], which the caller persists. One
+//! detector process can serve many accounts: every block is trial-decrypted
+//! once per account, and its nullifiers are sent once.
+//!
+//! Reorgs are handled two ways:
+//!
+//! - The detector checks that each block's `prev_hash` is the previous
+//!   block's hash. If not, it steps back [`FollowConfig::reorg_rewind`]
+//!   blocks and rescans, before reporting anything from the new blocks.
+//! - Wallet state is the authority. When its commitment trees hit a reorg it
+//!   forgets reports above the fork and bumps its reorg epoch; every
+//!   `IngestAck` carries the epoch and the height to rescan from, and a
+//!   detector that sees a newer epoch goes back to that height.
 
 use std::time::Duration;
 
@@ -36,6 +45,15 @@ pub enum DetectorError {
     /// Wallet state refused or failed.
     #[error("wallet ingest: {0}")]
     Ingest(String),
+    /// Block `height` does not extend the block before it.
+    #[error("reorg at block {height}")]
+    Reorg {
+        /// First block that does not link.
+        height: u64,
+    },
+    /// No accounts to scan for.
+    #[error("no accounts")]
+    NoAccounts,
 }
 
 fn action(height: u64, a: &cf::CompactOrchardAction) -> Result<CompactActionBytes, DetectorError> {
@@ -175,19 +193,45 @@ pub struct ScanSummary {
     pub notes: u64,
     /// Nullifier batches reported.
     pub nullifier_batches: u64,
+    /// Wallet state's answer to the nullifier stream.
+    pub nullifiers_ack: IngestAck,
     /// Wallet state's answer to the note stream.
     pub notes_ack: IngestAck,
+    /// Hash of the last block scanned.
+    pub last_hash: Vec<u8>,
 }
 
-/// Scans `from..=to` and sends everything found to wallet state.
+/// Scans `from..=to` for every detector's account and sends everything found
+/// to wallet state.
+///
+/// `prev_hash` is the hash of block `from - 1` if the caller knows it; if
+/// not, that block is fetched to learn it. Returns [`DetectorError::Reorg`]
+/// without reporting anything if the blocks do not form a chain on top of it.
 pub async fn scan_range<S: BlockSource>(
     source: &mut S,
-    detector: &Detector,
+    detectors: &[Detector],
     ingest: &mut WalletIngestClient<Channel>,
     from: u64,
     to: u64,
+    prev_hash: Option<&[u8]>,
 ) -> Result<ScanSummary, DetectorError> {
-    let blocks = source.blocks(from, to).await?;
+    if detectors.is_empty() {
+        return Err(DetectorError::NoAccounts);
+    }
+    let fetch_from = if prev_hash.is_none() && from > 0 {
+        from - 1
+    } else {
+        from
+    };
+    let mut blocks = source.blocks(fetch_from, to).await?;
+    let mut expected_prev = prev_hash.map(<[u8]>::to_vec);
+    if fetch_from < from {
+        if blocks.first().map(|b| b.height) != Some(fetch_from) {
+            return Err(DetectorError::Source(format!("block {fetch_from} missing")));
+        }
+        expected_prev = Some(blocks.remove(0).hash);
+    }
+
     let mut report = BlockReport::default();
     let mut expected = from;
     for b in &blocks {
@@ -197,10 +241,22 @@ pub async fn scan_range<S: BlockSource>(
                 b.height
             )));
         }
+        if let Some(prev) = &expected_prev
+            && *prev != b.prev_hash
+        {
+            return Err(DetectorError::Reorg { height: b.height });
+        }
+        expected_prev = Some(b.hash.clone());
         expected += 1;
-        let r = detector.scan_block(&from_lightwalletd(b)?);
-        report.notes.extend(r.notes);
-        report.nullifiers.extend(r.nullifiers);
+        let block = from_lightwalletd(b)?;
+        for (i, d) in detectors.iter().enumerate() {
+            let r = d.scan_block(&block);
+            report.notes.extend(r.notes);
+            // Nullifiers are the same for every account; send them once.
+            if i == 0 {
+                report.nullifiers.extend(r.nullifiers);
+            }
+        }
     }
     if expected != to + 1 {
         return Err(DetectorError::Source(format!(
@@ -209,51 +265,141 @@ pub async fn scan_range<S: BlockSource>(
         )));
     }
 
-    let summary = ScanSummary {
+    let mut summary = ScanSummary {
         blocks: blocks.len() as u64,
         notes: report.notes.len() as u64,
         nullifier_batches: report.nullifiers.len() as u64,
-        notes_ack: IngestAck::default(),
+        last_hash: blocks.last().map(|b| b.hash.clone()).unwrap_or_default(),
+        ..Default::default()
     };
     // Nullifiers first, so wallet state never sees a note before the
     // nullifiers of the same block range.
-    ingest
+    summary.nullifiers_ack = ingest
         .report_nullifiers(tokio_stream::iter(report.nullifiers))
         .await
-        .map_err(|e| DetectorError::Ingest(e.message().into()))?;
-    let ack = ingest
+        .map_err(|e| DetectorError::Ingest(e.message().into()))?
+        .into_inner();
+    summary.notes_ack = ingest
         .report_notes(tokio_stream::iter(report.notes))
         .await
         .map_err(|e| DetectorError::Ingest(e.message().into()))?
         .into_inner();
-    Ok(ScanSummary {
-        notes_ack: ack,
-        ..summary
-    })
+    Ok(summary)
 }
 
-/// Follows the chain from `next`: scans up to the tip in batches of
-/// `batch` blocks, then polls every `poll`. Calls `checkpoint` with the next
-/// height after each batch so the caller can persist it. Runs until an error.
+/// Where a detector is. Persist it after every batch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Cursor {
+    /// Next height to scan.
+    pub next: u64,
+    /// Hash of block `next - 1`, if known.
+    pub prev_hash: Option<Vec<u8>>,
+    /// Wallet state's reorg epoch as last seen; `None` for a new detector,
+    /// which adopts wallet state's epoch without rescanning.
+    pub reorg_epoch: Option<u64>,
+}
+
+impl Cursor {
+    /// A new detector starting at `next`.
+    pub fn starting_at(next: u64) -> Self {
+        Cursor {
+            next,
+            ..Default::default()
+        }
+    }
+
+    /// Applies wallet state's reorg epoch from an ack. Returns `true` if the
+    /// detector must go back.
+    pub fn apply_ack(&mut self, ack: &IngestAck) -> bool {
+        let Some(seen) = self.reorg_epoch else {
+            self.reorg_epoch = Some(ack.reorg_epoch);
+            return false;
+        };
+        if ack.reorg_epoch <= seen {
+            return false;
+        }
+        self.reorg_epoch = Some(ack.reorg_epoch);
+        let from = u64::from(ack.rescan_from);
+        if from > 0 && from < self.next {
+            self.next = from;
+            self.prev_hash = None;
+            return true;
+        }
+        false
+    }
+}
+
+/// How a detector follows the chain.
+#[derive(Clone, Copy, Debug)]
+pub struct FollowConfig {
+    /// Blocks per batch.
+    pub batch: u64,
+    /// Poll interval at the tip.
+    pub poll: Duration,
+    /// Blocks to step back when the chain does not link.
+    pub reorg_rewind: u64,
+}
+
+impl Default for FollowConfig {
+    fn default() -> Self {
+        FollowConfig {
+            batch: 100,
+            poll: Duration::from_secs(15),
+            reorg_rewind: 10,
+        }
+    }
+}
+
+/// Follows the chain from `cursor`: scans up to the tip in batches, then
+/// polls. Calls `checkpoint` with the cursor after each batch (and after
+/// each rewind) so the caller can persist it. Runs until an error, which
+/// leaves the last checkpoint valid to resume from.
 pub async fn follow<S: BlockSource>(
     source: &mut S,
-    detector: &Detector,
+    detectors: &[Detector],
     ingest: &mut WalletIngestClient<Channel>,
-    mut next: u64,
-    batch: u64,
-    poll: Duration,
-    mut checkpoint: impl FnMut(u64) + Send,
+    mut cursor: Cursor,
+    cfg: FollowConfig,
+    mut checkpoint: impl FnMut(&Cursor) + Send,
 ) -> Result<(), DetectorError> {
-    let batch = batch.max(1);
+    let batch = cfg.batch.max(1);
     loop {
         let tip = source.tip().await?;
-        if tip < next {
-            tokio::time::sleep(poll).await;
+        if tip < cursor.next {
+            tokio::time::sleep(cfg.poll).await;
             continue;
         }
-        let to = tip.min(next + batch - 1);
-        scan_range(source, detector, ingest, next, to).await?;
-        next = to + 1;
-        checkpoint(next);
+        let to = tip.min(cursor.next + batch - 1);
+        match scan_range(
+            source,
+            detectors,
+            ingest,
+            cursor.next,
+            to,
+            cursor.prev_hash.as_deref(),
+        )
+        .await
+        {
+            Ok(s) => {
+                cursor.next = to + 1;
+                cursor.prev_hash = Some(s.last_hash);
+                for ack in [&s.nullifiers_ack, &s.notes_ack] {
+                    if cursor.apply_ack(ack) {
+                        tracing::warn!(
+                            rescan_from = cursor.next,
+                            epoch = ack.reorg_epoch,
+                            "wallet state rewound past a reorg; rescanning"
+                        );
+                    }
+                }
+            }
+            Err(DetectorError::Reorg { height }) => {
+                cursor.next = height.saturating_sub(cfg.reorg_rewind).max(1);
+                cursor.prev_hash = None;
+                tracing::warn!(at = height, rescan_from = cursor.next, "reorg; rescanning");
+            }
+            Err(e) => return Err(e),
+        }
+        checkpoint(&cursor);
     }
 }

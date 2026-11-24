@@ -134,7 +134,14 @@ pub fn propose<P: Parameters + Clone>(
     payment: &Payment,
 ) -> Result<Proposal, Error> {
     let account = db.account(account_fp)?;
-    let candidates = db.spendable_notes(account_fp)?;
+    // While the trees replay blocks after a late report, notes above their
+    // height cannot be witnessed yet.
+    let tree_height = u64::from(trees.height());
+    let candidates: Vec<NoteRow> = db
+        .spendable_notes(account_fp)?
+        .into_iter()
+        .filter(|n| n.height <= tree_height)
+        .collect();
     let available: u64 = candidates.iter().map(|n| n.note.value().inner()).sum();
     let fee_rule = zip317::FeeRule::standard();
 

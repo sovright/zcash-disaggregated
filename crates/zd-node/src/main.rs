@@ -144,23 +144,35 @@ enum Cmd {
     },
     /// Detector role: scans compact blocks and reports to wallet state.
     Detector {
-        #[arg(long, env = "ZD_LIGHTWALLETD")]
-        lightwalletd: String,
+        /// lightwalletd endpoints. Several give failover: on an error the
+        /// detector moves to the next one.
+        #[arg(
+            long = "lightwalletd",
+            env = "ZD_LIGHTWALLETD",
+            value_delimiter = ',',
+            required = true
+        )]
+        lightwalletd: Vec<String>,
         /// Wallet state's ingest endpoint.
         #[arg(long)]
         wallet: String,
-        #[arg(long)]
-        account: PathBuf,
-        /// File holding the next height to scan.
+        /// Accounts to detect for. All share one scan of each block.
+        #[arg(long = "account", required = true)]
+        accounts: Vec<PathBuf>,
+        /// File holding the detector's position (written after each batch).
         #[arg(long)]
         state: PathBuf,
-        /// Height to start from if `--state` does not exist yet.
+        /// Height to start from if `--state` does not exist yet: the
+        /// earliest birthday of the accounts.
         #[arg(long)]
         from: Option<u64>,
         #[arg(long, default_value_t = 100)]
         batch: u64,
         #[arg(long, default_value_t = 15)]
         poll_secs: u64,
+        /// Blocks to step back when the chain does not link.
+        #[arg(long, default_value_t = 10)]
+        reorg_rewind: u64,
     },
     /// Wallet state role.
     #[command(subcommand)]
@@ -665,40 +677,42 @@ async fn main() -> Result<()> {
         Cmd::Detector {
             lightwalletd,
             wallet,
-            account,
+            accounts,
             state,
             from,
             batch,
             poll_secs,
+            reorg_rewind,
         } => {
-            let a: AccountFile = files::read(&account)?;
-            let detector =
-                zd_detect::Detector::new(a.account_ref()?, &a.external_ivk()?, &a.internal_ivk()?);
-            let next = match files::read_height(&state)? {
-                Some(h) => h,
-                None => from.ok_or_else(|| anyhow!("no --state yet; give --from"))?,
+            let mut detectors = Vec::new();
+            for a in load_accounts(&accounts)? {
+                detectors.push(zd_detect::Detector::new(
+                    a.account_ref()?,
+                    &a.external_ivk()?,
+                    &a.internal_ivk()?,
+                ));
+            }
+            let cursor = match files::read_cursor(&state)? {
+                Some(c) => c,
+                None => zd_services::detector::Cursor::starting_at(
+                    from.ok_or_else(|| anyhow!("no --state yet; give --from"))?,
+                ),
             };
-            let mut source = CompactTxStreamerClient::new(tls.connect(&lightwalletd).await?);
-            let mut ingest = WalletIngestClient::new(tls.lazy(&wallet)?);
-            tracing::info!(next, "detector");
-            let state_path = state.clone();
-            zd_services::detector::follow(
-                &mut source,
-                &detector,
-                &mut ingest,
-                next,
+            let cfg = zd_services::detector::FollowConfig {
                 batch,
-                Duration::from_secs(poll_secs),
-                move |h| {
-                    if let Err(e) =
-                        files::write_atomic(&state_path, h.to_string().as_bytes(), false)
-                    {
-                        tracing::error!(error = %e, "could not save detector state");
-                    }
-                },
+                poll: Duration::from_secs(poll_secs),
+                reorg_rewind,
+            };
+            run_detector(
+                &tls,
+                &lightwalletd,
+                &wallet,
+                &detectors,
+                cursor,
+                cfg,
+                &state,
             )
-            .await
-            .map_err(|e| anyhow!("detector: {e}"))?;
+            .await?;
         }
 
         Cmd::Wallet(WalletCmd::AddAccount {
@@ -800,6 +814,58 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Runs the detector forever: on any error it backs off (up to a minute),
+/// moves to the next lightwalletd, and resumes from the last saved cursor.
+async fn run_detector(
+    tls: &TlsOpts,
+    lightwalletd: &[String],
+    wallet: &str,
+    detectors: &[zd_detect::Detector],
+    mut cursor: zd_services::detector::Cursor,
+    cfg: zd_services::detector::FollowConfig,
+    state: &Path,
+) -> Result<()> {
+    let mut ingest = WalletIngestClient::new(tls.lazy(wallet)?);
+    let mut backoff = Duration::from_secs(1);
+    for url in lightwalletd.iter().cycle() {
+        tracing::info!(next = cursor.next, accounts = detectors.len(), lightwalletd = %url, "detector");
+        let err = match tls.connect(url).await {
+            Err(e) => e,
+            Ok(ch) => {
+                let mut source = CompactTxStreamerClient::new(ch);
+                let saved = std::sync::Mutex::new(cursor.clone());
+                let r = zd_services::detector::follow(
+                    &mut source,
+                    detectors,
+                    &mut ingest,
+                    cursor.clone(),
+                    cfg,
+                    |c| {
+                        if let Err(e) = files::write_cursor(state, c) {
+                            tracing::error!(error = %e, "could not save detector state");
+                        }
+                        *saved.lock().expect("cursor lock") = c.clone();
+                    },
+                )
+                .await;
+                let progressed = *saved.lock().expect("cursor lock") != cursor;
+                cursor = saved.into_inner().expect("cursor lock");
+                if progressed {
+                    backoff = Duration::from_secs(1);
+                }
+                match r {
+                    Ok(()) => return Ok(()),
+                    Err(e) => anyhow!("{e}"),
+                }
+            }
+        };
+        tracing::warn!(error = %err, retry_in = ?backoff, "detector stopped");
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(Duration::from_secs(60));
+    }
+    unreachable!("lightwalletd list is not empty")
 }
 
 /// Keeps the trees following the chain; rebuilds them from the birthday

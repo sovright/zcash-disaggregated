@@ -10,7 +10,7 @@
 
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, Ordering},
 };
 use std::time::Duration;
 
@@ -43,6 +43,9 @@ pub struct WalletState<P> {
     pub params: P,
     /// Last chain tip seen.
     pub tip: AtomicU32,
+    /// A note arrived for a block older than the kept checkpoints; the
+    /// trees must be rebuilt to confirm it.
+    pub needs_rebuild: AtomicBool,
 }
 
 impl<P> WalletState<P> {
@@ -54,6 +57,7 @@ impl<P> WalletState<P> {
             trees: Mutex::new(trees),
             params,
             tip: AtomicU32::new(tip),
+            needs_rebuild: AtomicBool::new(false),
         })
     }
 
@@ -64,6 +68,41 @@ impl<P> WalletState<P> {
         let mut t = self.trees.lock().expect("trees lock");
         db.mark_all_unconfirmed()?;
         *t = trees;
+        self.needs_rebuild.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// A note for block `height` arrived after the trees applied it, so its
+    /// leaf was not kept. Rewinds the trees (not the database) to just before
+    /// it; [`follow_chain`] re-applies the blocks and confirms the note. Too
+    /// old to rewind: flags a rebuild.
+    pub fn replay_from(&self, height: u32) {
+        let mut trees = self.trees.lock().expect("trees lock");
+        if trees.height() < height {
+            return;
+        }
+        match trees.rewind(height.saturating_sub(1)) {
+            Ok(()) => tracing::info!(height, "late note report; replaying blocks"),
+            Err(_) => {
+                tracing::warn!(
+                    height,
+                    "late note report below kept checkpoints; rebuild needed"
+                );
+                self.needs_rebuild.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn fill_ack(&self, ack: &mut IngestAck) -> Result<(), Status> {
+        let (epoch, from) = self
+            .db
+            .lock()
+            .expect("db lock")
+            .reorg_marker()
+            .map_err(status)?;
+        ack.reorg_epoch = epoch;
+        ack.rescan_from = u32::try_from(from).unwrap_or(u32::MAX);
+        ack.tip_height = self.tree_height();
         Ok(())
     }
 
@@ -93,10 +132,14 @@ impl<P: Send + Sync + 'static> WalletIngest for IngestService<P> {
     ) -> Result<Response<IngestAck>, Status> {
         let mut stream = request.into_inner();
         let mut ack = IngestAck::default();
+        let mut earliest_new = u32::MAX;
         while let Some(r) = stream.message().await? {
             let outcome = self.0.db.lock().expect("db lock").ingest_note(&r);
             match outcome {
-                Ok(Ingested::New) => ack.accepted += 1,
+                Ok(Ingested::New) => {
+                    ack.accepted += 1;
+                    earliest_new = earliest_new.min(r.height);
+                }
                 Ok(Ingested::Duplicate) => ack.duplicates += 1,
                 Err(Error::Rejected(reason)) | Err(Error::Tree(reason)) => {
                     tracing::warn!(height = r.height, %reason, "rejected note report");
@@ -106,7 +149,10 @@ impl<P: Send + Sync + 'static> WalletIngest for IngestService<P> {
                 Err(e) => return Err(status(e)),
             }
         }
-        ack.tip_height = self.0.tree_height();
+        if earliest_new != u32::MAX {
+            self.0.replay_from(earliest_new);
+        }
+        self.0.fill_ack(&mut ack)?;
         Ok(Response::new(ack))
     }
 
@@ -123,7 +169,7 @@ impl<P: Send + Sync + 'static> WalletIngest for IngestService<P> {
                 Err(e) => return Err(status(e)),
             }
         }
-        ack.tip_height = self.0.tree_height();
+        self.0.fill_ack(&mut ack)?;
         Ok(Response::new(ack))
     }
 }
@@ -305,6 +351,11 @@ pub async fn follow_chain<P, S: BlockSource>(
 ) -> Result<(), Error> {
     let src = |e: zd_services::detector::DetectorError| Error::Tree(e.to_string());
     loop {
+        if state.needs_rebuild.load(Ordering::Relaxed) {
+            return Err(Error::Tree(
+                "a note arrived below the kept checkpoints; rebuild".into(),
+            ));
+        }
         let tip = u32::try_from(source.tip().await.map_err(src)?)
             .map_err(|_| Error::Tree("tip height out of range".into()))?;
         state.tip.store(tip, Ordering::Relaxed);
