@@ -26,6 +26,14 @@ Design notes: [docs/design.md](docs/design.md).
 - `zd-keys`: ZIP 2005 key derivation (`nk`, `qsk`, `qk`, `rivk_ext`), the
   commit-reveal ceremony for the shared `sk`, and FVK assembly from a FROST or
   HSM `ak`. Cross-checked against `orchard` 0.16.
+- `zd-frost`, `zd-pczt`, `zd-detect`, `zd-address`: FROST RedPallas, the PCZT
+  signer and prover roles, trial decryption, and address minting.
+- `zd-services`: gRPC services for the prover, signers (1/1 and FROST),
+  address service, detector daemon and key ceremony.
+- `zd-wallet`: wallet state. Checks detector reports against the FVK, tracks
+  spends, keeps the commitment trees, and builds and finishes sends.
+- `zd-node`: the `zd` binary, one subcommand per role. See
+  [docs/deploy.md](docs/deploy.md).
 
 ## Status
 

@@ -32,15 +32,16 @@ mod tests {
     #[test]
     fn ceremony_message_oneof() {
         let msg = CeremonyMessage {
-            body: Some(ceremony_message::Body::SkCommit(SkCommit {
+            body: Some(ceremony_message::Body::Round1(CeremonyRound1 {
                 transcript_id: vec![7; 32],
                 participant: 2,
-                commitment: vec![9; 32],
+                sk_commit: vec![9; 32],
+                dkg_package: vec![1, 2, 3],
             })),
         };
         let decoded = CeremonyMessage::decode(msg.encode_to_vec().as_slice()).unwrap();
         assert!(
-            matches!(decoded.body, Some(ceremony_message::Body::SkCommit(c)) if c.participant == 2)
+            matches!(decoded.body, Some(ceremony_message::Body::Round1(c)) if c.participant == 2)
         );
     }
 }

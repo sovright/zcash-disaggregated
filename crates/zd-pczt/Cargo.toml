@@ -1,0 +1,30 @@
+[package]
+name = "zd-pczt"
+version = "0.1.0"
+description = "PCZT (ZIP 374) glue for disaggregated Orchard-protocol signers and provers: find the spends an account must authorize, sign them with FROST or a 1/1 key, apply signatures, and prove"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+orchard.workspace = true
+pasta_curves.workspace = true
+pczt = { version = "0.10", features = ["signer", "prover"] }
+rand_core.workspace = true
+thiserror.workspace = true
+zd-frost = { path = "../zd-frost" }
+
+[dev-dependencies]
+incrementalmerkletree = "0.9"
+rand = { workspace = true, features = ["sys_rng"] }
+rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
+shardtree = "0.8"
+zcash_note_encryption = "0.5"
+zcash_primitives = { version = "0.31", features = ["transparent-inputs"] }
+zcash_protocol = { version = "0.11", features = ["local-consensus"] }
+zd-keys = { path = "../zd-keys" }
+zip32 = "0.3"
+pczt = { version = "0.10", features = ["signer", "prover", "io-finalizer", "tx-extractor", "zcp-builder"] }
+orchard = { workspace = true, features = ["circuit"] }
+ff.workspace = true

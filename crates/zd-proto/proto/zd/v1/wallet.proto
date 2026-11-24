@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package zd.v1;
+
+import "zd/v1/common.proto";
+
+// Wallet state's operator API: balances and sends. Exposed only to the
+// customer's own systems (for example the intents solver or the custody
+// platform), never to detectors or signers.
+service Wallet {
+  rpc GetBalance(BalanceRequest) returns (Balance);
+  rpc Send(SendRequest) returns (SendResponse);
+}
+
+message BalanceRequest {
+  AccountRef account = 1;
+}
+
+message Balance {
+  // Spendable: unspent, not held by a pending send, and confirmed by the
+  // commitment tree.
+  uint64 orchard_zat = 1;
+  uint64 ironwood_zat = 2;
+  // Last block the commitment trees have applied.
+  uint32 tree_height = 3;
+}
+
+message SendRequest {
+  AccountRef account = 1;
+  // Unified address with an Orchard receiver, or 43-byte raw address hex.
+  string recipient = 2;
+  uint64 amount_zat = 3;
+  // Up to 512 bytes; empty for no memo.
+  bytes memo = 4;
+  // Broadcast through lightwalletd once extracted.
+  bool broadcast = 5;
+  // Shown to signer approvers.
+  string reason = 6;
+}
+
+message SendResponse {
+  // Transaction id, internal byte order.
+  bytes txid = 1;
+  bytes raw_tx = 2;
+  uint64 fee_zat = 3;
+  bool broadcast = 4;
+}

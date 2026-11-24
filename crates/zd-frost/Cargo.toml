@@ -1,0 +1,31 @@
+[package]
+name = "zd-frost"
+version = "0.1.0"
+description = "FROST(Pallas, BLAKE2b-512) for Orchard-protocol spend authorization: RedPallas ciphersuite, PCZT fixed-randomizer signing, and a DKG that also produces the ZIP 2005 sk/qsk"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+blake2b_simd.workspace = true
+ff.workspace = true
+group.workspace = true
+pasta_curves.workspace = true
+thiserror.workspace = true
+zeroize = { workspace = true, features = ["zeroize_derive"] }
+zd-keys = { path = "../zd-keys" }
+# frost-core 3.0 is built on rand_core 0.6; orchard 0.16 uses 0.10. Only the
+# 0.6 traits appear in this crate's API.
+frost-rerandomized = { version = "3.0.0", features = ["serialization"] }
+rand_core = "0.6"
+
+[dev-dependencies]
+frost-rerandomized = { version = "3.0.0", features = ["test-impl"] }
+orchard.workspace = true
+rand_chacha = "0.3"
+rand_core = { version = "0.6", features = ["getrandom"] }
+# The last release that shipped the upstream RedPallas FROST ciphersuite.
+# Used only to check that our encodings and signatures are byte-identical.
+reddsa_upstream = { package = "reddsa", version = "=0.5.2", features = ["frost"] }
+hex = "0.4"

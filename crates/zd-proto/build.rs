@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "proto/zd/v1/detect.proto",
         "proto/zd/v1/address.proto",
         "proto/zd/v1/spend.proto",
+        "proto/zd/v1/wallet.proto",
     ];
     for f in FILES {
         println!("cargo:rerun-if-changed={f}");
