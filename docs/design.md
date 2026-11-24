@@ -81,3 +81,21 @@ then each participant derives the account and broadcasts `fvk_hash`.
   whose top byte is `i` (2^80 each) and must persist its counter. Addresses
   are revision 0 unified addresses (`u1...`) with a single Orchard receiver,
   the form deployed wallets parse today.
+
+## FROST signer service (`zd_services::frost`)
+
+Chosen 2026-11-24: FROST rounds use our own gRPC (`FrostParticipant` in
+`spend.proto`), not frostd, so every role speaks one protocol.
+
+- Wallet state calls the account's `Signer` (the coordinator) exactly as for
+  a 1/1 signer.
+- Round 1 (`Commit`) goes to every member with the redacted PCZT. Each member
+  finds its spends, runs its own policy, and only then creates nonces bound to
+  the sighash and each spend's alpha. It returns one commitment per spend and
+  a digest of the sighash so the coordinator can detect disagreement.
+- The coordinator keeps the first `threshold` members by identifier, tells
+  the others to drop their nonces, and runs round 2 (`Sign`) with exactly
+  those. A member's nonces for a job are consumed by its first `Sign`,
+  whatever the outcome; a second `Commit` for the same job is refused.
+- The coordinator holds no secrets. It can deny service but cannot get a
+  signature over a PCZT a member's policy rejected.

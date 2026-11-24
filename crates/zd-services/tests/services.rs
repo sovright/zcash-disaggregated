@@ -31,11 +31,24 @@ use zd_proto::v1::{
     prover_server::ProverServer, sign_result, signer_client::SignerClient,
     signer_server::SignerServer,
 };
+use zd_proto::v1::{
+    FrostCommitRequest, FrostSignRequest, frost_commit_response,
+    frost_participant_client::FrostParticipantClient,
+    frost_participant_server::FrostParticipantServer, frost_sign_response,
+};
 use zd_services::{
     address::{AddressServiceImpl, MemoryCounters},
+    frost::{FrostAccount, FrostCoordinatorService, FrostParticipantService},
     prover::{ProverService, ProvingKeys},
     signer::{AllowAll, Policy, SignerAccount, SingleSignerService},
 };
+
+fn ironwood_pk() -> &'static orchard::circuit::ProvingKey {
+    static PK: std::sync::OnceLock<orchard::circuit::ProvingKey> = std::sync::OnceLock::new();
+    PK.get_or_init(|| {
+        orchard::circuit::ProvingKey::build(orchard::circuit::OrchardCircuitVersion::PostNu6_3)
+    })
+}
 
 fn network() -> zcash_protocol::local_consensus::LocalNetwork {
     let h = |n| Some(BlockHeight::from_u32(n));
@@ -196,6 +209,21 @@ mod tower_service_bound {
     pub type ProverServerT = ProverServer<ProverService>;
     pub type SignerServerT = SignerServer<SingleSignerService<AllowAll>>;
     pub type SignerServerRejectT = SignerServer<SingleSignerService<RejectAll>>;
+    svc!(MemberT);
+    svc!(CoordinatorT);
+    pub type MemberT = FrostParticipantServer<FrostParticipantService<Toggle>>;
+    pub type CoordinatorT = SignerServer<FrostCoordinatorService>;
+}
+
+pub struct Toggle(pub bool);
+impl Policy for Toggle {
+    fn check(&self, _: &SignJob, _: &Pczt, _: &zd_pczt::SigningRequest) -> Result<(), String> {
+        if self.0 {
+            Ok(())
+        } else {
+            Err("member policy says no".into())
+        }
+    }
 }
 
 pub struct RejectAll;
@@ -369,4 +397,216 @@ async fn policy_rejection_is_returned() {
         r.outcome,
         Some(sign_result::Outcome::RejectedReason("policy: no".into()))
     );
+}
+
+// ---------------------------------------------------------------------------
+// FROST quorum over gRPC
+// ---------------------------------------------------------------------------
+
+fn ceremony() -> std::collections::BTreeMap<u16, zd_frost::ceremony::ParticipantKeys> {
+    use std::collections::BTreeMap;
+    use zd_frost::ceremony::{self, CeremonyConfig};
+    let ids = [1u16, 2, 3];
+    let transcript_id = zd_keys::ceremony::transcript_id(b"services");
+    let mut r1 = BTreeMap::new();
+    let mut b1 = BTreeMap::new();
+    for me in ids {
+        let cfg = CeremonyConfig {
+            transcript_id,
+            threshold: 2,
+            participants: ids.to_vec(),
+            me,
+        };
+        let (st, m) = ceremony::start(cfg, &mut OsRng).unwrap();
+        r1.insert(me, st);
+        b1.insert(me, m);
+    }
+    let mut r2 = BTreeMap::new();
+    let mut inbox: BTreeMap<u16, BTreeMap<u16, _>> = BTreeMap::new();
+    for (me, st) in r1 {
+        let rx = b1
+            .iter()
+            .filter(|(i, _)| **i != me)
+            .map(|(i, m)| (*i, m.clone()))
+            .collect();
+        let (s2, out) = st.round2(&rx).unwrap();
+        r2.insert(me, s2);
+        for (to, m) in out {
+            inbox.entry(to).or_default().insert(me, m);
+        }
+    }
+    r2.into_iter()
+        .map(|(me, st)| (me, st.finish(&inbox[&me]).unwrap()))
+        .collect()
+}
+
+struct Quorum {
+    fp: Vec<u8>,
+    fvk: orchard::keys::FullViewingKey,
+    coordinator: SignerClient<Channel>,
+    members: Vec<FrostParticipantClient<Channel>>,
+}
+
+/// Three members (with the given policies) and a coordinator.
+async fn quorum(policies: [bool; 3]) -> Quorum {
+    let keys = ceremony();
+    let fp = keys[&1].fvk_hash().to_vec();
+    let fvk = keys[&1].account().fvk().clone();
+    let mut members = Vec::new();
+    for (i, allow) in [1u16, 2, 3].into_iter().zip(policies) {
+        let mut accounts = HashMap::new();
+        accounts.insert(fp.clone(), keys[&i].key_package().clone());
+        let ch = serve(FrostParticipantServer::new(FrostParticipantService::new(
+            accounts,
+            Toggle(allow),
+        )))
+        .await;
+        members.push(FrostParticipantClient::new(ch));
+    }
+    let mut accounts = HashMap::new();
+    accounts.insert(
+        fp.clone(),
+        FrostAccount {
+            public_key_package: keys[&1].public_key_package().clone(),
+            members: members.clone(),
+        },
+    );
+    let coordinator =
+        SignerClient::new(serve(SignerServer::new(FrostCoordinatorService::new(accounts))).await);
+    Quorum {
+        fp,
+        fvk,
+        coordinator,
+        members,
+    }
+}
+
+async fn frost_sign(q: &mut Quorum, pczt: &Pczt, job: &[u8]) -> sign_result::Outcome {
+    q.coordinator
+        .sign(SignJob {
+            job_id: job.to_vec(),
+            account: account_ref(&q.fp),
+            pczt: pczt.clone().serialize().unwrap(),
+            memo: String::new(),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .outcome
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn frost_quorum_signs_over_grpc() {
+    // Member 2 declines; 1 and 3 still make the threshold.
+    let mut q = quorum([true, false, true]).await;
+    let pczt = build_pczt(&q.fvk);
+
+    let signed = match frost_sign(&mut q, &pczt, b"job-a").await {
+        sign_result::Outcome::SignedPczt(b) => Pczt::parse(&b).unwrap(),
+        sign_result::Outcome::RejectedReason(r) => panic!("rejected: {r}"),
+    };
+    let proved = zd_pczt::prove(pczt, None, Some(ironwood_pk()), &mut UnwrapErr(SysRng)).unwrap();
+    let combined = pczt::roles::combiner::Combiner::new(vec![proved, signed])
+        .combine()
+        .unwrap();
+    TransactionExtractor::new(combined)
+        .extract(UnwrapErr(SysRng))
+        .expect("valid transaction");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn frost_quorum_below_threshold_rejects() {
+    let mut q = quorum([true, false, false]).await;
+    let pczt = build_pczt(&q.fvk);
+    match frost_sign(&mut q, &pczt, b"job-b").await {
+        sign_result::Outcome::RejectedReason(r) => {
+            assert!(r.contains("only 1 of 2"), "{r}");
+            assert!(r.contains("member policy says no"), "{r}");
+        }
+        sign_result::Outcome::SignedPczt(_) => panic!("must not sign"),
+    }
+    // Member 1 committed but was released, so its nonces are gone.
+    let r = q.members[0]
+        .sign(FrostSignRequest {
+            job_id: b"job-b".to_vec(),
+            account: account_ref(&q.fp),
+            signing_packages: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        r.outcome,
+        Some(frost_sign_response::Outcome::RejectedReason(
+            "no commitment for this job".into()
+        ))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn member_refuses_reuse_and_other_messages() {
+    let mut q = quorum([true, true, true]).await;
+    let pczt = build_pczt(&q.fvk);
+    let bytes = pczt.serialize().unwrap();
+    let commit = |m: &mut FrostParticipantClient<Channel>, job: &'static [u8]| {
+        let mut m = m.clone();
+        let req = FrostCommitRequest {
+            job_id: job.to_vec(),
+            account: account_ref(&q.fp),
+            pczt: bytes.clone(),
+            memo: String::new(),
+        };
+        async move { m.commit(req).await.unwrap().into_inner() }
+    };
+
+    // A second Commit for the same job is refused (no nonce reuse).
+    let first = commit(&mut q.members[0], b"job-c").await;
+    assert!(matches!(
+        first.outcome,
+        Some(frost_commit_response::Outcome::Commitments(_))
+    ));
+    let again = commit(&mut q.members[0], b"job-c").await;
+    assert_eq!(
+        again.outcome,
+        Some(frost_commit_response::Outcome::RejectedReason(
+            "already committed to this job".into()
+        ))
+    );
+
+    // A signing package for a different message is refused.
+    let Some(frost_commit_response::Outcome::Commitments(c)) = first.outcome else {
+        unreachable!()
+    };
+    let id = zd_frost::Identifier::deserialize(&first.identifier).unwrap();
+    let other = commit(&mut q.members[1], b"job-c").await;
+    let Some(frost_commit_response::Outcome::Commitments(c2)) = other.outcome else {
+        unreachable!()
+    };
+    let id2 = zd_frost::Identifier::deserialize(&other.identifier).unwrap();
+    let comms = [
+        (
+            id,
+            zd_frost::round1::SigningCommitments::deserialize(&c.per_spend[0]).unwrap(),
+        ),
+        (
+            id2,
+            zd_frost::round1::SigningCommitments::deserialize(&c2.per_spend[0]).unwrap(),
+        ),
+    ]
+    .into();
+    let bad = zd_frost::SigningPackage::new(comms, &[0u8; 32]);
+    let r = q.members[0]
+        .sign(FrostSignRequest {
+            job_id: b"job-c".to_vec(),
+            account: account_ref(&q.fp),
+            signing_packages: vec![bad.serialize().unwrap()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(matches!(
+        r.outcome,
+        Some(frost_sign_response::Outcome::RejectedReason(ref m)) if m.contains("does not match")
+    ));
 }

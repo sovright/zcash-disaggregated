@@ -1,15 +1,19 @@
-//! gRPC services for the roles that do not need the FROST transport:
+//! gRPC services for the wallet roles:
 //!
 //! - [`prover::ProverService`]: any 1 of n provers. Proving runs on a
 //!   blocking thread with bounded concurrency.
 //! - [`signer::SingleSignerService`]: a 1/1 signer holding `ask` (for
 //!   example in an HSM) with a pluggable [`signer::Policy`].
+//! - [`frost::FrostParticipantService`] and [`frost::FrostCoordinatorService`]:
+//!   a FROST quorum over our own gRPC rounds; the coordinator is the account's
+//!   `Signer` service.
 //! - [`address::AddressServiceImpl`]: diversified address minting with a
 //!   persisted counter per account.
 //!
 //! Accounts are identified on the wire by `AccountRef.ufvk_fingerprint`.
 
 pub mod address;
+pub mod frost;
 pub mod prover;
 pub mod signer;
 

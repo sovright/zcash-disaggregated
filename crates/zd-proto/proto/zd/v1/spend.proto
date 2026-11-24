@@ -33,8 +33,8 @@ message ProveResult {
   uint64 prove_time_ms = 4;
 }
 
-// A 1/1 signer, or the coordinator of a FROST quorum. FROST rounds themselves
-// run over frostd; this service is the entry point that hands over the PCZT.
+// A 1/1 signer, or the coordinator of a FROST quorum (which drives the
+// FrostParticipant rounds below). Wallet state only ever talks to this.
 service Signer {
   rpc Sign(SignJob) returns (SignResult);
 }
@@ -55,4 +55,61 @@ message SignResult {
     bytes signed_pczt = 2;
     string rejected_reason = 3;
   }
+}
+
+// One FROST quorum member. The coordinator (the Signer service of a FROST
+// account) calls Commit on every member, picks `threshold` of those that
+// agreed, then calls Sign on exactly those. Each member checks the PCZT and
+// runs its own policy in Commit, before any nonce exists, and binds its nonces
+// to the PCZT's sighash and each spend's alpha; Sign refuses anything else.
+service FrostParticipant {
+  rpc Commit(FrostCommitRequest) returns (FrostCommitResponse);
+  rpc Sign(FrostSignRequest) returns (FrostSignResponse);
+}
+
+message FrostCommitRequest {
+  bytes job_id = 1;
+  AccountRef account = 2;
+  // Redacted PCZT, as in SignJob.
+  bytes pczt = 3;
+  string memo = 4;
+}
+
+message FrostCommitResponse {
+  bytes job_id = 1;
+  // This member's FROST identifier (serialized, 32 bytes).
+  bytes identifier = 2;
+  oneof outcome {
+    FrostCommitments commitments = 3;
+    string rejected_reason = 4;
+  }
+}
+
+message FrostCommitments {
+  // One serialized frost SigningCommitments per spend, in the order of the
+  // spends the member found (Orchard pool first, then by action index).
+  repeated bytes per_spend = 1;
+  // BLAKE2b-256 of the shielded sighash, so the coordinator can check that
+  // every member is signing the same transaction.
+  bytes sighash_digest = 2;
+}
+
+message FrostSignRequest {
+  bytes job_id = 1;
+  AccountRef account = 2;
+  // One serialized frost SigningPackage per spend, same order as commitments.
+  repeated bytes signing_packages = 3;
+}
+
+message FrostSignResponse {
+  bytes job_id = 1;
+  oneof outcome {
+    FrostShares shares = 2;
+    string rejected_reason = 3;
+  }
+}
+
+message FrostShares {
+  // One serialized frost SignatureShare per spend.
+  repeated bytes per_spend = 1;
 }

@@ -3452,6 +3452,7 @@ dependencies = [
 name = "zd-services"
 version = "0.1.0"
 dependencies = [
+ "blake2b_simd",
  "ff 0.14.0",
  "incrementalmerkletree",
  "orchard",
