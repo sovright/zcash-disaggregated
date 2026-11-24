@@ -1,0 +1,40 @@
+[package]
+name = "zd-wallet"
+version = "0.1.0"
+description = "Wallet state for a disaggregated Orchard-protocol wallet: verified note store, spend tracking, commitment trees, and PCZT construction"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+incrementalmerkletree = "0.9"
+orchard = { workspace = true, features = ["circuit"] }
+pczt = { version = "0.10", features = ["zcp-builder", "io-finalizer", "tx-extractor", "signer", "prover"] }
+rand = { workspace = true, features = ["sys_rng"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
+shardtree = "0.8"
+thiserror.workspace = true
+hex = "0.4"
+tokio = { version = "1", features = ["sync", "time"] }
+tracing = "0.1"
+tonic.workspace = true
+zcash_client_backend = { version = "0.25", default-features = false, features = ["orchard", "lightwalletd-tonic-transport"] }
+zcash_primitives = "0.31"
+zcash_protocol = "0.11"
+zd-address = { path = "../zd-address" }
+zd-proto = { path = "../zd-proto" }
+zd-services = { path = "../zd-services" }
+
+[dev-dependencies]
+http = "1"
+tower = "0.5"
+zcash_note_encryption = "0.5"
+zd-detect = { path = "../zd-detect" }
+rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+zcash_protocol = { version = "0.11", features = ["local-consensus"] }
+zd-frost = { path = "../zd-frost" }
+zd-keys = { path = "../zd-keys" }
+ff.workspace = true

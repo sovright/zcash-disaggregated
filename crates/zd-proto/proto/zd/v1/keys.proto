@@ -89,10 +89,14 @@ message AccountExport {
   bool use_qsk = 6;
 }
 
-// What detectors and the address service receive.
+// What detectors and the address service receive. A UIVK holds only the
+// external IVK; detectors also need the internal one to find change notes.
 message ViewingExport {
   AccountRef account = 1;
   string uivk = 2;
+  // Raw 64-byte internal-scope Orchard IVK (dk || ivk). Omit for address
+  // servers, which only need the UIVK.
+  bytes internal_ivk = 3;
 }
 
 message CeremonyMessage {

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/zd-proto", "crates/zd-keys", "crates/zd-frost", "crates/zd-pczt", "crates/zd-detect", "crates/zd-address", "crates/zd-services"]
+members = ["crates/zd-proto", "crates/zd-keys", "crates/zd-frost", "crates/zd-pczt", "crates/zd-detect", "crates/zd-address", "crates/zd-services", "crates/zd-wallet", "crates/zd-node"]
 
 [workspace.package]
 edition = "2024"

@@ -114,3 +114,39 @@ Chosen 2026-11-24: FROST rounds use our own gRPC (`FrostParticipant` in
   is sealed to its recipient (ephemeral X25519, BLAKE2b key derivation bound
   to transcript, keys and ids, ChaCha20-Poly1305). The relay drops anything
   unsigned or from a participant whose params differ.
+
+## Wallet state (`zd-wallet`)
+
+Wallet state is the only role with the UFVK. It keeps a SQLite database
+(accounts, notes, revealed nullifiers) and the two note commitment trees in
+memory.
+
+- **Detectors can withhold, not invent.** A `NoteReport` is rebuilt into a
+  note; its commitment must equal the reported `cmx`, and the recipient must
+  be the account's address in the reported scope. The nullifier is computed
+  here with `nk`. The note is stored as unconfirmed.
+- **The chain confirms.** The tree tracker applies lightwalletd compact
+  blocks a few confirmations behind the tip. It marks a leaf only when a
+  stored note claims that position with the same `cmx`, and only then is the
+  note spendable. A stored note the block does not confirm is deleted. So a
+  self-consistent note that a detector made up never becomes spendable.
+- **Trees.** In memory, rebuilt from the tree state before the earliest
+  account birthday on start; each block is a checkpoint, and the last 100 are
+  kept for reorgs. A reorg rewinds trees and database by 10 blocks; notes in
+  the discarded blocks are forgotten until detectors rescan (v1 limitation:
+  detectors are not told automatically).
+- **Sends.** Notes are picked Ironwood first, largest first; the fee is the
+  ZIP 317 fee from the builder, iterated until the selection settles. Change
+  goes to the internal address in Ironwood. The PCZT goes to the prover with
+  witnesses and to the signer without them, in parallel; the results are
+  combined, and extraction verifies every proof and signature. Notes are
+  held under the job id while building and under the txid afterwards, and
+  released when the spend's nullifier is seen.
+
+## Deployment (`zd`)
+
+One binary, one subcommand per role; see `docs/deploy.md`. Every server can
+use TLS, and with `--ca` it requires client certificates (mTLS). The ingest
+API does not authenticate detectors itself, so it should always run with
+mTLS. Key material is in 0600 TOML files for now; HSM and KMS backends for
+the 1/1 signer and FROST members are the next step.

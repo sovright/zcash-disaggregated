@@ -67,3 +67,26 @@ fn range_is_bounded() {
         ]
     );
 }
+
+#[test]
+fn unified_key_round_trips() {
+    use zd_address::keys;
+    let fvk = fvk();
+    let ufvk = keys::ufvk(&fvk, NetworkType::Test);
+    let (net, back) = keys::parse_ufvk(&ufvk).unwrap();
+    assert_eq!(net, NetworkType::Test);
+    assert_eq!(back.to_bytes(), fvk.to_bytes());
+    let uivk = keys::uivk(&fvk, NetworkType::Test);
+    let (_, ivk) = keys::parse_uivk(&uivk).unwrap();
+    assert_eq!(ivk.to_bytes(), fvk.to_ivk(Scope::External).to_bytes());
+    assert_ne!(keys::fingerprint(&ufvk), keys::fingerprint(&uivk));
+
+    let mut s = AddressServer::new(ivk, NetworkType::Test, 0, 0);
+    let a = s.next_address().unwrap();
+    assert_eq!(
+        keys::parse_orchard_address(&a.unified_address)
+            .unwrap()
+            .to_raw_address_bytes(),
+        a.orchard_receiver
+    );
+}

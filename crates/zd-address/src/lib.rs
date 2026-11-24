@@ -111,3 +111,78 @@ impl AddressServer {
         Ok(a)
     }
 }
+
+/// Unified key encodings and the account fingerprint used on the wire.
+pub mod keys {
+    use orchard::keys::{FullViewingKey, IncomingViewingKey, Scope};
+    use zcash_address::unified::{self, Container, Encoding};
+    use zcash_protocol::consensus::NetworkType;
+
+    /// Encodes the account's UFVK (Orchard item only).
+    pub fn ufvk(fvk: &FullViewingKey, network: NetworkType) -> String {
+        unified::Ufvk::try_from_items(
+            unified::Revision::R0,
+            vec![unified::Uitem::Data(unified::Fvk::Orchard(fvk.to_bytes()))],
+        )
+        .expect("one Orchard item is a valid UFVK")
+        .encode(&network)
+    }
+
+    /// Encodes the account's UIVK (external Orchard IVK only).
+    pub fn uivk(fvk: &FullViewingKey, network: NetworkType) -> String {
+        let ivk = fvk.to_ivk(Scope::External).to_bytes();
+        unified::Uivk::try_from_items(
+            unified::Revision::R0,
+            vec![unified::Uitem::Data(unified::Ivk::Orchard(ivk))],
+        )
+        .expect("one Orchard item is a valid UIVK")
+        .encode(&network)
+    }
+
+    /// Decodes a UFVK's Orchard FVK.
+    pub fn parse_ufvk(s: &str) -> Option<(NetworkType, FullViewingKey)> {
+        let (net, _, ufvk) = unified::Ufvk::decode(s).ok()?;
+        ufvk.items().into_iter().find_map(|i| match i {
+            unified::Fvk::Orchard(b) => FullViewingKey::from_bytes(&b).map(|f| (net, f)),
+            _ => None,
+        })
+    }
+
+    /// Decodes a UIVK's Orchard (external) IVK.
+    pub fn parse_uivk(s: &str) -> Option<(NetworkType, IncomingViewingKey)> {
+        let (net, _, uivk) = unified::Uivk::decode(s).ok()?;
+        uivk.items().into_iter().find_map(|i| match i {
+            unified::Ivk::Orchard(b) => {
+                Option::from(IncomingViewingKey::from_bytes(&b)).map(|k| (net, k))
+            }
+            _ => None,
+        })
+    }
+
+    /// `AccountRef.ufvk_fingerprint`: BLAKE2b-256 of the encoded UFVK.
+    pub fn fingerprint(ufvk: &str) -> [u8; 32] {
+        let h = blake2b_simd::Params::new()
+            .hash_length(32)
+            .personal(b"ZDisagg_UfvkFp__")
+            .hash(ufvk.as_bytes());
+        h.as_bytes().try_into().expect("32 bytes")
+    }
+
+    /// Parses a payment address: a unified address with an Orchard receiver,
+    /// or 43 raw Orchard address bytes in hex.
+    pub fn parse_orchard_address(s: &str) -> Option<orchard::Address> {
+        let raw: [u8; 43] = if let Ok((_, _, ua)) = unified::Address::decode(s) {
+            ua.items().into_iter().find_map(|r| match r {
+                unified::Receiver::Orchard(b) => Some(b),
+                _ => None,
+            })?
+        } else {
+            let bytes: Vec<u8> = (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+                .collect::<Option<_>>()?;
+            bytes.try_into().ok()?
+        };
+        Option::from(orchard::Address::from_raw_address_bytes(&raw))
+    }
+}

@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+blake2b_simd.workspace = true
 orchard.workspace = true
 thiserror.workspace = true
 zcash_address = "0.14"
