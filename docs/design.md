@@ -56,3 +56,15 @@ round 1 broadcasts the `sk` commitment and DKG round 1 package; round 2 sends
 the `sk` reveal and DKG round 2 package point to point over confidential
 channels (anyone who sees every reveal learns `sk`, hence `nk` and `qsk`);
 then each participant derives the account and broadcasts `fvk_hash`.
+
+## PCZT roles (`zd-pczt`)
+
+- A signer finds its spends by `rk == ak + [alpha] G`, not by trusting the
+  `fvk` field; a spend whose `fvk` names the account but whose `rk` does not
+  match is rejected, as is any PCZT that still carries `dummy_sk`.
+- Signing and proving run in parallel on the same PCZT; signatures are applied
+  to the proved PCZT (the sighash does not cover proofs or, in v6, the anchor).
+- FROST signs every spend of a transaction in the same two rounds, one
+  `zd_frost::spend` session per spend.
+- Policy checks (Verifier role: outputs, values, recipients) stay with the
+  signer service and must run before round 1.
